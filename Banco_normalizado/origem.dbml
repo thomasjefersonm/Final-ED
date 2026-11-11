@@ -1,0 +1,192 @@
+// Banco de origem (OLTP normalizado) - TSE, Presidente 2026, 1o e 2o turno
+// Colar em https://dbdiagram.io/d para gerar o diagrama (issue #3).
+// DDL equivalente: 01_schema.sql
+
+Project tse_presidente_2026 {
+  database_type: 'PostgreSQL'
+  Note: 'Origem normalizada (3FN) a partir dos CSVs do Portal de Dados Abertos do TSE'
+}
+
+// ---------------------------------------------------------------- Eleicao
+
+Table eleicao {
+  id_eleicao smallint [pk]
+  ano_eleicao smallint [not null]
+  cd_tipo_eleicao smallint [not null]
+  nm_tipo_eleicao varchar(60) [not null]
+  ds_eleicao varchar(100) [not null]
+  tp_abrangencia char(1) [not null]
+
+  indexes {
+    (ano_eleicao, ds_eleicao) [unique]
+  }
+}
+
+Table turno {
+  id_turno smallint [pk]
+  id_eleicao smallint [not null, ref: > eleicao.id_eleicao]
+  nr_turno smallint [not null]
+  cd_eleicao_tse integer [not null, unique, note: 'CD_ELEICAO do TSE: 6257 (1T) e 6258 (2T)']
+  cd_pleito integer [unique]
+  dt_pleito date [not null]
+
+  indexes {
+    (id_eleicao, nr_turno) [unique]
+  }
+}
+
+Table cargo {
+  cd_cargo smallint [pk]
+  ds_cargo varchar(40) [not null, unique]
+}
+
+// ---------------------------------------------------------------- Geografia
+
+Table uf {
+  sg_uf char(2) [pk]
+  nm_uf varchar(30) [not null]
+  nm_regiao varchar(15) [not null]
+  Note: '27 UFs + ZZ (Exterior). Nome e regiao sao seed, nao vem dos CSVs.'
+}
+
+Table municipio {
+  cd_municipio integer [pk, note: 'Codigo TSE (nao IBGE)']
+  nm_municipio varchar(60) [not null]
+  sg_uf char(2) [not null, ref: > uf.sg_uf]
+}
+
+Table zona {
+  id_zona integer [pk, increment]
+  sg_uf char(2) [not null, ref: > uf.sg_uf]
+  nr_zona smallint [not null]
+
+  indexes {
+    (sg_uf, nr_zona) [unique]
+  }
+  Note: 'Zona pertence a UF e pode cobrir varios municipios'
+}
+
+Table local_votacao {
+  id_local_votacao integer [pk, increment]
+  cd_municipio integer [not null, ref: > municipio.cd_municipio]
+  id_zona integer [not null, ref: > zona.id_zona]
+  nr_local_votacao integer [not null]
+  nm_local_votacao varchar(120) [not null]
+  ds_endereco varchar(120)
+
+  indexes {
+    (cd_municipio, id_zona, nr_local_votacao) [unique]
+  }
+}
+
+Table secao {
+  id_secao integer [pk, increment]
+  id_zona integer [not null, ref: > zona.id_zona]
+  nr_secao smallint [not null]
+  cd_municipio integer [not null, ref: > municipio.cd_municipio]
+
+  indexes {
+    (id_zona, nr_secao) [unique]
+  }
+}
+
+// ---------------------------------------------------------------- Partidos e candidatos
+
+Table partido {
+  nr_partido smallint [pk]
+  sg_partido varchar(20) [not null, unique]
+  nm_partido varchar(100) [not null]
+  nm_federacao varchar(100)
+}
+
+Table candidato {
+  sq_candidato bigint [pk]
+  nr_candidato smallint [not null]
+  nm_candidato varchar(100) [not null]
+  nm_urna_candidato varchar(60)
+  cd_cargo smallint [not null, ref: > cargo.cd_cargo]
+  nr_partido smallint [not null, ref: > partido.nr_partido]
+  tp_agremiacao varchar(20)
+  nm_coligacao varchar(100)
+  ds_composicao_coligacao varchar(300)
+  ds_situacao_julgamento varchar(40)
+  ds_sit_tot_turno varchar(40) [note: 'Situacao atual: muda do 1T para o 2T (gatilho do SCD2)']
+  dt_atualizacao timestamp [not null, default: `now()`]
+
+  indexes {
+    (cd_cargo, nr_candidato) [unique]
+  }
+}
+
+// ---------------------------------------------------------------- Apuracao e votacao
+
+Table apuracao_secao {
+  id_turno smallint [not null, ref: > turno.id_turno]
+  id_secao integer [not null, ref: > secao.id_secao]
+  id_local_votacao integer [not null, ref: > local_votacao.id_local_votacao]
+  ds_modelo_urna varchar(20)
+  ds_origem_voto varchar(100) [not null]
+  qt_aptos integer [not null]
+  qt_comparecimento integer [not null]
+  qt_abstencoes integer [not null]
+  qt_votos_nominais integer [not null]
+  qt_votos_brancos integer [not null]
+  qt_votos_nulos integer [not null]
+  qt_votos_legenda integer [not null, default: 0]
+  qt_votos_anulados_apu_sep integer [not null, default: 0]
+  st_secao_instalada boolean [not null]
+  st_secao_anulada boolean [not null]
+  dt_recebimento_bu timestamp
+  dt_primeira_totalizacao timestamp
+  dt_carga timestamp [not null, default: `now()`]
+
+  indexes {
+    (id_turno, id_secao) [pk]
+  }
+  Note: '1 linha por secao por turno. Brancos e nulos ficam aqui.'
+}
+
+Table votacao_secao {
+  id_turno smallint [not null]
+  id_secao integer [not null]
+  sq_candidato bigint [not null, ref: > candidato.sq_candidato]
+  qt_votos integer [not null]
+  dt_carga timestamp [not null, default: `now()`]
+
+  indexes {
+    (id_turno, id_secao, sq_candidato) [pk]
+  }
+  Note: '1 linha por secao, turno e candidato (so votos nominais)'
+}
+
+Ref: votacao_secao.(id_turno, id_secao) > apuracao_secao.(id_turno, id_secao)
+
+// ---------------------------------------------------------------- Historico de totalizacao
+
+Table totalizacao {
+  id_totalizacao bigint [pk, note: 'ID_TOTALIZACAO do TSE: cada um cobre 1 municipio/zona']
+  id_turno smallint [not null, ref: > turno.id_turno]
+  cd_municipio integer [not null, ref: > municipio.cd_municipio]
+  id_zona integer [not null, ref: > zona.id_zona]
+  dt_totalizacao timestamp [not null]
+  qt_secoes_tot integer [not null]
+  qt_secoes_tot_acumulado integer [not null]
+  qt_aptos_tot integer [not null]
+  qt_aptos_tot_acumulado integer [not null]
+  qt_votos_brancos integer [not null]
+  qt_votos_brancos_acumulado integer [not null]
+  qt_votos_nulos integer [not null]
+  qt_votos_nulos_acumulado integer [not null]
+  dt_carga timestamp [not null, default: `now()`]
+}
+
+Table totalizacao_candidato {
+  id_totalizacao bigint [not null, ref: > totalizacao.id_totalizacao]
+  sq_candidato bigint [not null, ref: > candidato.sq_candidato]
+  qt_votos integer [not null]
+  qt_votos_acumulado integer [not null]
+
+  indexes {
+    (id_totalizacao, sq_candidato) [pk]
+  }
+}
