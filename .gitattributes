@@ -1,0 +1,5 @@
+# Scripts e YAML sempre com LF (evita quebra de shell em containers Linux quando clonado no Windows)
+* text=auto
+*.sh  text eol=lf
+*.yml text eol=lf
+*.py  text eol=lf

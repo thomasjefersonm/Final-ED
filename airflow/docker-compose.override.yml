@@ -1,0 +1,23 @@
+# Complementa o compose gerado pelo Astro CLI (astro dev start):
+#  - usa o .env da raiz do projeto (conexão do Postgres e do MinIO);
+#  - liga o Airflow à rede do MinIO (projeto Compose "final-ed"),
+#    onde o MinIO é acessado por http://minio:9000.
+x-final-ed: &final-ed
+  env_file:
+    - ../.env
+  environment:
+    MINIO_ENDPOINT: http://minio:9000
+  networks:
+    - default
+    - lake
+
+services:
+  scheduler: *final-ed
+  dag-processor: *final-ed
+  triggerer: *final-ed
+  api-server: *final-ed
+
+networks:
+  lake:
+    name: final-ed_default
+    external: true
