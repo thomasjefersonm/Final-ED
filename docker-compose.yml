@@ -1,0 +1,68 @@
+# =============================================================================
+# Final-ED - Data Lake local (object storage) para a arquitetura medalhão
+#
+#   minio       -> object storage compatível com S3 (API :9020 / console :9021)
+#   minio-init  -> cria os buckets landing, bronze, silver e gold e encerra
+#
+# Equivalente "na mão" ao notebook 001_preparando_ambiente do trabalho 3
+# (Databricks): lá eram schemas/volume do Unity Catalog, aqui são buckets.
+#
+# Uso:  docker compose up -d      (sobe e cria os buckets)
+#       docker compose down       (para, mantém os dados)
+#       docker compose down -v    (para e APAGA os dados = 006_destruindo_ambiente)
+#
+# Imagem: a MinIO Inc. deixou de publicar imagens (minio/minio no Docker Hub e
+# quay.io/minio/minio não existem mais), por isso a imagem usada nos trabalhos
+# 1 e 2 (minio/minio:RELEASE.2025-02-03T21-03-04Z) não baixa mais.
+# Usamos o fork mantido pela comunidade pgsty/minio (mesmo binário AGPLv3,
+# mesmas variáveis/portas/comandos, console web completo), com versão fixada.
+# =============================================================================
+name: final-ed
+
+x-minio-image: &minio-image pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+
+services:
+  minio:
+    image: *minio-image
+    container_name: final-ed-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9020}:9000"
+      - "${MINIO_CONSOLE_PORT:-9021}:9001"
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  minio-init:
+    # Mesma imagem do servidor (já traz o cliente "mc"), evitando versões diferentes.
+    image: *minio-image
+    container_name: final-ed-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      BUCKETS: ${MINIO_BUCKETS:-landing bronze silver gold}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set lake http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        for bucket in $$BUCKETS; do
+          mc mb --ignore-existing "lake/$$bucket"
+        done
+        echo "Buckets da arquitetura medalhão:"
+        mc ls lake
+    restart: "no"
+
+volumes:
+  minio-data:

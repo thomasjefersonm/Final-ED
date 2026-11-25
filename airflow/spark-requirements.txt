@@ -1,0 +1,7 @@
+# Ambiente Python 3.11 das tasks Spark (/opt/spark-venv)
+# Versões travadas (as mesmas testadas no ambiente local)
+pyspark==3.5.3
+delta-spark==3.2.1
+boto3==1.44.11
+pg8000==1.31.6
+pandas==3.1.1

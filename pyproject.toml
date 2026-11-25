@@ -1,30 +1,37 @@
-[tool.poetry]
-name = "projeto-ed-satc"
+[project]
+name = "final-ed"
 version = "0.1.0"
-description = ""
-authors = ["Your Name <you@example.com>"]
+description = "Trabalho Final - Pipeline de dados com Data Lake (MinIO), arquitetura medalhão, Spark e Delta Lake - Engenharia de Dados SATC"
 readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "boto3>=1.34",
+    "pg8000>=1.31",
+    "python-dotenv>=1.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.11"
+[dependency-groups]
+dev = [
+    "taskipy>=1.13",
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10.8",
+]
 
+[tool.uv]
+default-groups = ["dev", "docs"]
 
-[tool.poetry.group.dev.dependencies]
-isort = "^5.13.2"
-blue = "^0.9.1"
-
-
-[tool.poetry.group.docs.dependencies]
-mkdocs = "^1.6.0"
-mkdocs-material = "^9.5.23"
-pymdown-extensions = "^10.8.1"
-mkdocstrings = "0.24.0"
-mkdocs-autorefs = "0.5.0"
-
-
-[tool.poetry.group.test.dependencies]
-pytest = "^8.2.0"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.taskipy.tasks]
+up = "docker compose up -d"
+down = "docker compose down"
+destruir = "docker compose down -v"
+logs = "docker compose logs -f minio"
+testar = "python scripts/testar_ambiente.py"
+airflow_up = "cd airflow && astro dev start"
+airflow_down = "cd airflow && astro dev stop"
+airflow_restart = "cd airflow && astro dev restart"
+docs = "mkdocs serve"
+build = "mkdocs build --strict"
+deploy = "mkdocs gh-deploy"
