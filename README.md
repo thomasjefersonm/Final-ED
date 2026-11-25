@@ -11,7 +11,9 @@ Engenharia de Dados · Engenharia de Software · UNISATC · Prof. Jorge Luiz da 
 ## Integrantes
 - Thomas Jeferson da Silva Maggi
 - Bruno Ghisi da Silva
-- _(completar com os demais integrantes do grupo)_
+- Artur Bristot Rocha
+- Jean Vitor Vieira
+- Mateus Salles Melo
 
 ## ⚠️ Aviso
 Projeto acadêmico executado localmente com containers Docker. As credenciais do MinIO abaixo servem **apenas** para este ambiente de estudo. As credenciais do banco de origem ficam no `.env`, que **não** é versionado.
