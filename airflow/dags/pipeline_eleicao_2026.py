@@ -3,10 +3,12 @@
 
 Agendado pelo **Airflow** (não usa cron nem Agendador do Windows): todo dia às 02h.
 
-    listar_tabelas ──▶ extracao_landing (1 task por tabela, em paralelo)
-                       Postgres → CSV em s3://landing/<tabela>/
+    listar_tabelas ──▶ extracao_landing ──▶ landing_para_bronze
+                       (1 task por tabela)   (Spark)
+                       Postgres → CSV        CSV → Delta
+                       s3://landing/         s3://bronze/
 
-Próximas etapas (entram nesta mesma DAG): landing → bronze → silver → gold.
+Próximas etapas (entram nesta mesma DAG): bronze → silver → gold.
 
 O código de cada etapa fica em `include/pipeline/`; a DAG só define a ordem
 e o agendamento.
@@ -58,7 +60,16 @@ def pipeline_eleicao_2026():
 
         return extrair_tabela(item["tabela"], item["carimbo"])
 
-    extracao_landing.expand(item=listar_tabelas())
+    @task.external_python(python=SPARK_PYTHON)
+    def landing_para_bronze() -> list[dict]:
+        import sys
+
+        sys.path.insert(0, "/usr/local/airflow/include")
+        from pipeline.bronze import landing_para_bronze as carregar
+
+        return carregar()
+
+    extracao_landing.expand(item=listar_tabelas()) >> landing_para_bronze()
 
 
 pipeline_eleicao_2026()
