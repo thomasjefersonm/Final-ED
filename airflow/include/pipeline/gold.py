@@ -127,31 +127,40 @@ def _vincular_dimensoes(
     return fato
 
 
-def _fato_apuracao(silver: dict[str, DataFrame], dimensoes: dict[str, DataFrame]) -> DataFrame:
-    apuracao = silver["apuracao_secao"].withColumn("qt_votos_validos", F.col("qt_votos_nominais"))
-    dimensoes_apuracao = {nome: dimensoes[nome] for nome in ("turno", "secao")}
-    return _vincular_dimensoes(apuracao, dimensoes_apuracao, "fato_apuracao_secao").select(
-        *CHAVE_APURACAO, "id_local_votacao", "sk_turno", "sk_secao", *MEDIDAS_APURACAO, "dt_carga",
+def _colunas_atualizaveis(medidas: tuple[str, ...]) -> tuple[str, ...]:
+    return (*medidas, "id_local_votacao", "dt_carga")
+
+
+def _condicao_atualizacao(medidas: tuple[str, ...]) -> str:
+    alteracoes = " OR ".join(
+        f"NOT (nova.{coluna} <=> atual.{coluna})"
+        for coluna in _colunas_atualizaveis(medidas)
+    )
+    return f"nova.dt_carga >= atual.dt_carga AND ({alteracoes})"
+
+
+def _selecionar_incremento(
+    spark: SparkSession, origem: DataFrame, caminho: str,
+    chaves: tuple[str, ...], medidas: tuple[str, ...],
+) -> DataFrame:
+    if not DeltaTable.isDeltaTable(spark, caminho):
+        return origem
+
+    atual = spark.read.format("delta").load(caminho).select(
+        *chaves, *_colunas_atualizaveis(medidas),
+    )
+    return (
+        origem.alias("nova").join(atual.alias("atual"), list(chaves), "left")
+        .where(f"atual.{chaves[0]} IS NULL OR ({_condicao_atualizacao(medidas)})")
+        .select("nova.*")
     )
 
 
-def _fato_votacao(silver: dict[str, DataFrame], dimensoes: dict[str, DataFrame]) -> DataFrame:
-    fato = (
-        silver["votacao_secao"].select(*CHAVE_VOTACAO, "qt_votos", "dt_carga")
-        .join(
-            silver["apuracao_secao"].select(*CHAVE_APURACAO, "id_local_votacao"),
-            list(CHAVE_APURACAO),
-            "left",
-        )
-        .join(
-            silver["candidato"].select("sq_candidato", "nr_partido", "cd_cargo"),
-            "sq_candidato",
-            "left",
-        )
-    )
-    return _vincular_dimensoes(fato, dimensoes, "fato_votacao_secao").select(
-        *CHAVE_VOTACAO, "id_local_votacao", *(f"sk_{nome}" for nome in dimensoes),
-        "qt_votos", "dt_carga",
+def _origem_votacao(silver: dict[str, DataFrame]) -> DataFrame:
+    return silver["votacao_secao"].select(*CHAVE_VOTACAO, "qt_votos", "dt_carga").join(
+        silver["apuracao_secao"].select(*CHAVE_APURACAO, "id_local_votacao"),
+        list(CHAVE_APURACAO),
+        "left",
     )
 
 
@@ -165,14 +174,11 @@ def _gravar_fato(
 
     delta = DeltaTable.forPath(spark, caminho)
     correspondencia = " AND ".join(f"atual.{chave} = nova.{chave}" for chave in chaves)
-    colunas_atualizaveis = (*medidas, "id_local_votacao", "dt_carga")
-    alteracoes = " OR ".join(
-        f"NOT (nova.{coluna} <=> atual.{coluna})" for coluna in colunas_atualizaveis
-    )
+    colunas_atualizaveis = _colunas_atualizaveis(medidas)
     (
         delta.alias("atual").merge(fato.alias("nova"), correspondencia)
         .whenMatchedUpdate(
-            condition=f"nova.dt_carga >= atual.dt_carga AND ({alteracoes})",
+            condition=_condicao_atualizacao(medidas),
             set={
                 **{coluna: f"nova.{coluna}" for coluna in colunas_atualizaveis},
                 "sk_secao": (
@@ -205,13 +211,31 @@ def silver_para_gold() -> dict[str, str]:
             nome: _gravar_dimensao(spark, origem, destinos[f"dim_{nome}"], nome, instante)
             for nome, origem in _dimensoes(silver).items()
         }
+        apuracao = silver["apuracao_secao"].withColumn("qt_votos_validos", F.col("qt_votos_nominais"))
         fatos = (
-            ("fato_apuracao_secao", _fato_apuracao(silver, dimensoes), CHAVE_APURACAO, MEDIDAS_APURACAO),
-            ("fato_votacao_secao", _fato_votacao(silver, dimensoes), CHAVE_VOTACAO, ("qt_votos",)),
+            ("fato_apuracao_secao", apuracao, CHAVE_APURACAO, MEDIDAS_APURACAO,
+             ("turno", "secao")),
+            ("fato_votacao_secao", _origem_votacao(silver), CHAVE_VOTACAO, ("qt_votos",),
+             tuple(dimensoes)),
         )
-        for nome, fato, chaves, medidas in fatos:
-            destinos[nome] = f"s3a://{bucket_gold}/{nome}"
-            _gravar_fato(spark, fato, destinos[nome], chaves, medidas)
+        for nome, origem, chaves, medidas, nomes_dimensoes in fatos:
+            caminho = destinos[nome] = f"s3a://{bucket_gold}/{nome}"
+            incremento = _selecionar_incremento(spark, origem, caminho, chaves, medidas)
+            if DeltaTable.isDeltaTable(spark, caminho) and not incremento.take(1):
+                continue
+
+            if nome == "fato_votacao_secao":
+                incremento = incremento.join(
+                    silver["candidato"].select("sq_candidato", "nr_partido", "cd_cargo"),
+                    "sq_candidato",
+                    "left",
+                )
+            dimensoes_fato = {nome_dim: dimensoes[nome_dim] for nome_dim in nomes_dimensoes}
+            fato = _vincular_dimensoes(incremento, dimensoes_fato, nome).select(
+                *chaves, "id_local_votacao", *(f"sk_{nome_dim}" for nome_dim in nomes_dimensoes),
+                *medidas, "dt_carga",
+            )
+            _gravar_fato(spark, fato, caminho, chaves, medidas)
         print("Tabelas Gold publicadas:", destinos)
         return destinos
     finally:
